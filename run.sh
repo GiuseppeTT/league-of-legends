@@ -1,0 +1,1 @@
+uv run crawl_matches.py | tee -a log/crawler.log
