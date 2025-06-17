@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import count
 
 import structlog
+import typer
 from dotenv import load_dotenv
 
 from src.client import Division, LeagueClient, Queue, QueueId, Region, RegionGroup, Tier
@@ -25,11 +26,6 @@ from src.util import now
 
 load_dotenv(override=True)
 API_KEY = os.environ["API_KEY"]
-
-# TODO: Use CLI arguments to get this
-REGION = Region.NA1
-REGION_GROUP = RegionGroup.from_region(REGION)
-CRAWL_TIERS = [Tier.CHALLENGER, Tier.GRANDMASTER, Tier.MASTER, Tier.DIAMOND]
 LEAGUE_CRAWL_INTERVAL = timedelta(days=1)
 MATCH_TIME_WINDOW = timedelta(days=7)
 MATCH_COUNT_MAXIMUM = 100
@@ -114,8 +110,14 @@ class Player:
         return estimated_new_match_count
 
 
-def main():
+def main(
+    region: Region = typer.Option(..., "--region", help="Region to crawl", case_sensitive=False),
+    crawl_tiers: list[Tier] = typer.Option(
+        ..., "--tier", help="Tier(s) to crawl", case_sensitive=False
+    ),
+):
     logger.info("Starting crawler")
+    region_group = RegionGroup.from_region(region)
     league_client = LeagueClient(API_KEY)
     last_league_crawl_time = datetime.min.replace(tzinfo=timezone.utc)
     player_by_puuid = {}
@@ -126,24 +128,31 @@ def main():
                 "League data is outdated. Crawling leagues",
                 last_league_crawl_time=last_league_crawl_time.isoformat(),
             )
-            crawl_leagues(league_client, player_by_puuid)
+            crawl_leagues(league_client, region, crawl_tiers, player_by_puuid)
             player_by_puuid = clean_player_by_puuid(player_by_puuid)
             crawl_time_by_match_id = clean_crawl_time_by_match_id(crawl_time_by_match_id)
             last_league_crawl_time = now()
             continue
         player = get_next_player_for_crawl(player_by_puuid)
-        new_match_ids = crawl_new_match_ids(league_client, player, crawl_time_by_match_id)
-        crawl_matches(league_client, new_match_ids, crawl_time_by_match_id, player)
+        new_match_ids = crawl_new_match_ids(
+            league_client, region_group, player, crawl_time_by_match_id
+        )
+        crawl_matches(league_client, region_group, new_match_ids, crawl_time_by_match_id, player)
 
 
-def crawl_leagues(league_client: LeagueClient, player_by_puuid: dict[str, Player]):
-    for tier in CRAWL_TIERS:
+def crawl_leagues(
+    league_client: LeagueClient,
+    region: Region,
+    crawl_tiers: list[Tier],
+    player_by_puuid: dict[str, Player],
+):
+    for tier in crawl_tiers:
         for division in Division:
             if tier.is_apex_tier() and division != Division.I:
                 continue
             for page in count(1):
                 league = league_client.get_league(
-                    REGION, Queue.RANKED_SOLO_5x5, tier, division, page
+                    region, Queue.RANKED_SOLO_5x5, tier, division, page
                 )
                 logger.info(
                     f"Got {len(league)} players",
@@ -238,13 +247,16 @@ def get_next_player_for_crawl(player_by_puuid: dict[str, Player]) -> Player:
 
 
 def crawl_new_match_ids(
-    league_client: LeagueClient, player: Player, crawl_time_by_match_id: dict[str, datetime]
+    league_client: LeagueClient,
+    region_group: RegionGroup,
+    player: Player,
+    crawl_time_by_match_id: dict[str, datetime],
 ) -> set[str]:
     local_logger = logger.bind(player=player)
     start_time = now() - MATCH_TIME_WINDOW
     start_time = int(start_time.timestamp())
     match_ids = league_client.get_match_ids_by_puuid(
-        REGION_GROUP, player.puuid, start_time=start_time, queue_id=QueueId.RANKED_SOLO_5x5
+        region_group, player.puuid, start_time=start_time, queue_id=QueueId.RANKED_SOLO_5x5
     )
     match_ids = set(match_ids)
     player.update_from_match_ids(match_ids)
@@ -255,12 +267,13 @@ def crawl_new_match_ids(
 
 def crawl_matches(
     league_client: LeagueClient,
+    region_group: RegionGroup,
     new_match_ids: set[str],
     crawl_time_by_match_id: dict[str, datetime],
     player: Player,
 ):
     for i, new_match_id in enumerate(new_match_ids):
-        match_ = league_client.get_match(REGION_GROUP, new_match_id)
+        match_ = league_client.get_match(region_group, new_match_id)
         logger.info(
             "Got match data",
             index=i + 1,
@@ -273,4 +286,4 @@ def crawl_matches(
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)
