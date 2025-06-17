@@ -27,10 +27,10 @@ load_dotenv(override=True)
 API_KEY = os.environ["API_KEY"]
 
 # TODO: Use CLI arguments to get this
-REGION = Region.JP1  # REGION = Region.NA1
+REGION = Region.NA1
 REGION_GROUP = RegionGroup.from_region(REGION)
 CRAWL_TIERS = [Tier.CHALLENGER, Tier.GRANDMASTER, Tier.MASTER, Tier.DIAMOND]
-LEAGUE_SNAPSHOT_PERIOD = timedelta(days=1)  # TODO: Better name
+LEAGUE_CRAWL_INTERVAL = timedelta(days=1)
 MATCH_TIME_WINDOW = timedelta(days=7)
 MATCH_COUNT_MAXIMUM = 100
 
@@ -98,18 +98,18 @@ class Player:
     def is_match_never_crawled(self) -> bool:
         return self.last_match_crawl_time is None
 
-    def get_time_since_last_match_crawl(self) -> timedelta:
+    def get_period_since_last_match_crawl(self) -> timedelta:
         if self.last_match_crawl_time is None:
             return timedelta.max
-        time_since_last_match_crawl = now() - self.last_match_crawl_time
-        return time_since_last_match_crawl
+        period_since_last_match_crawl = now() - self.last_match_crawl_time
+        return period_since_last_match_crawl
 
     def estimate_new_match_count(self) -> float:
         if self.last_match_crawl_time is None:
             return float("inf")
-        time_since_last_match_crawl = self.get_time_since_last_match_crawl()
+        period_since_last_match_crawl = self.get_period_since_last_match_crawl()
         estimated_new_match_count = (
-            self.last_match_count * time_since_last_match_crawl / MATCH_TIME_WINDOW
+            self.last_match_count * period_since_last_match_crawl / MATCH_TIME_WINDOW
         )
         return estimated_new_match_count
 
@@ -121,7 +121,7 @@ def main():
     player_by_puuid = {}
     crawl_time_by_match_id = {}
     while True:
-        if now() - last_league_crawl_time >= LEAGUE_SNAPSHOT_PERIOD:
+        if now() - last_league_crawl_time >= LEAGUE_CRAWL_INTERVAL:
             logger.info(
                 "League data is outdated. Crawling leagues",
                 last_league_crawl_time=last_league_crawl_time.isoformat(),
@@ -133,18 +133,7 @@ def main():
             continue
         player = get_next_player_for_crawl(player_by_puuid)
         new_match_ids = crawl_new_match_ids(league_client, player, crawl_time_by_match_id)
-        # TODO: Extract function: Crawl matches
-        for i, new_match_id in enumerate(new_match_ids):
-            match_ = league_client.get_match(REGION_GROUP, new_match_id)
-            logger.info(
-                "Got match data",
-                index=i + 1,
-                max_index=len(new_match_ids),
-                match_id=new_match_id,
-                player=player,
-            )
-            # TODO: Write match data to DB here
-            crawl_time_by_match_id[new_match_id] = now()
+        crawl_matches(league_client, new_match_ids, crawl_time_by_match_id, player)
 
 
 def crawl_leagues(league_client: LeagueClient, player_by_puuid: dict[str, Player]):
@@ -164,8 +153,8 @@ def crawl_leagues(league_client: LeagueClient, player_by_puuid: dict[str, Player
                 )
                 if len(league) == 0:
                     break
+                # TODO: Write league entry to DB here
                 for entry in league:
-                    # TODO: Write league entry to DB here
                     puuid = entry["puuid"]
                     if puuid not in player_by_puuid:
                         player_by_puuid[puuid] = Player.from_league_entry(entry)
@@ -174,13 +163,22 @@ def crawl_leagues(league_client: LeagueClient, player_by_puuid: dict[str, Player
 
 
 def clean_player_by_puuid(player_by_puuid: dict[str, Player]) -> dict[str, Player]:
-    # TODO: Extract function: Remove old players
+    player_by_puuid = remove_old_players(player_by_puuid)
+    player_by_puuid = sort_players_by_league(player_by_puuid)
+    logger.info(f"There are {len(player_by_puuid)} players being tracked")
+    return player_by_puuid
+
+
+def remove_old_players(player_by_puuid: dict[str, Player]) -> dict[str, Player]:
     player_by_puuid = {
         puuid: player
         for puuid, player in player_by_puuid.items()
         if now() - player.last_league_crawl_time <= MATCH_TIME_WINDOW
     }
-    # TODO: Extract function: Order players by league
+    return player_by_puuid
+
+
+def sort_players_by_league(player_by_puuid: dict[str, Player]) -> dict[str, Player]:
     tier_order = list(Tier)
     division_order = list(Division)
     player_by_puuid = sorted(  # ty: ignore[invalid-assignment]
@@ -199,23 +197,43 @@ def clean_crawl_time_by_match_id(
         for match_id, crawl_time in crawl_time_by_match_id.items()
         if now() - crawl_time <= MATCH_TIME_WINDOW
     }
+    logger.info(f"There are {len(crawl_time_by_match_id)} matches being tracked")
     return crawl_time_by_match_id
 
 
 def get_next_player_for_crawl(player_by_puuid: dict[str, Player]) -> Player:
-    maximum_estimated_new_match_count = float("-inf")
     maximum_player = list(player_by_puuid.values())[0]
+    maximum_estimated_new_match_count = maximum_player.estimate_new_match_count()
     for player in player_by_puuid.values():
         if player.is_match_never_crawled():
+            logger.info(
+                f"Player {player.puuid} has never been crawled for matches. Crawling next",
+                player=player,
+            )
             return player
-        if player.get_time_since_last_match_crawl() >= MATCH_TIME_WINDOW / 2:
+        if player.get_period_since_last_match_crawl() >= MATCH_TIME_WINDOW / 2:
+            logger.info(
+                f"Player {player.puuid} has been crawled for too long. Crawling next",
+                player=player,
+                period_since_last_match_crawl=player.get_period_since_last_match_crawl(),
+            )
             return player
         estimated_new_match_count = player.estimate_new_match_count()
         if estimated_new_match_count >= MATCH_COUNT_MAXIMUM / 2:
+            logger.info(
+                f"Player {player.puuid} probably has too many new matches. Crawling next",
+                player=player,
+                estimated_new_match_count=estimated_new_match_count,
+            )
             return player
         if estimated_new_match_count >= maximum_estimated_new_match_count:
             maximum_estimated_new_match_count = estimated_new_match_count
             maximum_player = player
+    logger.info(
+        f"Player {maximum_player.puuid} probably has the most new matches. Crawling next",
+        player=maximum_player,
+        estimated_new_match_count=maximum_estimated_new_match_count,
+    )
     return maximum_player
 
 
@@ -230,10 +248,28 @@ def crawl_new_match_ids(
     )
     match_ids = set(match_ids)
     player.update_from_match_ids(match_ids)
-    local_logger.info(f"Got {len(match_ids)} match ids")
     new_match_ids = match_ids - set(crawl_time_by_match_id.keys())
-    local_logger.info(f"Got {len(new_match_ids)} new match ids")
+    local_logger.info(f"Got {len(match_ids)} match ids, of which {len(new_match_ids)} are new")
     return new_match_ids
+
+
+def crawl_matches(
+    league_client: LeagueClient,
+    new_match_ids: set[str],
+    crawl_time_by_match_id: dict[str, datetime],
+    player: Player,
+):
+    for i, new_match_id in enumerate(new_match_ids):
+        match_ = league_client.get_match(REGION_GROUP, new_match_id)
+        logger.info(
+            "Got match data",
+            index=i + 1,
+            max_index=len(new_match_ids),
+            match_id=new_match_id,
+            player=player,
+        )
+        # TODO: Write match data to DB here
+        crawl_time_by_match_id[new_match_id] = now()
 
 
 if __name__ == "__main__":

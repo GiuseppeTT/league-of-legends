@@ -4,8 +4,6 @@ from typing import Self
 
 import requests
 import structlog
-from pyrate_limiter import Duration, Limiter, RequestRate
-from requests_ratelimiter import LimiterSession
 
 logger = structlog.get_logger()
 
@@ -103,12 +101,7 @@ class LeagueClient:
     HEADER_RETRY_AFTER = "Retry-After"
 
     def __init__(self, api_key: str):
-        second_rate = RequestRate(20, Duration.SECOND * 1)
-        minute_rate = RequestRate(100, Duration.MINUTE * 2)
-        limiter = Limiter(second_rate, minute_rate)
-        session = LimiterSession(limiter=limiter)
-        session.headers.update({LeagueClient.HEADER_API_KEY: api_key})
-        self._session = session
+        self._api_key = api_key
 
     def get_league(
         self, region: Region, queue: Queue, tier: Tier, division: Division, page: int = 1
@@ -154,7 +147,8 @@ class LeagueClient:
                 local_logger = logger.bind(
                     attempt=attempt + 1, max_attempt=LeagueClient.MAX_RETRIES, url=url
                 )
-                response = self._session.get(url, params=params)
+                headers = {LeagueClient.HEADER_API_KEY: self._api_key}
+                response = requests.get(url, params=params, headers=headers)
                 response.raise_for_status()
                 body = response.json()
                 return body

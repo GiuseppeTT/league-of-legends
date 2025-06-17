@@ -6,9 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "dotenv>=0.9.9",
-    "pyrate-limiter>=2.10.0",
     "requests>=2.32.4",
-    "requests-ratelimiter>=0.7.0",
     "structlog>=25.4.0",
 ]
 
