@@ -1,0 +1,3 @@
+- [ ] Move from sqlite to postgresql (deployed in the same VM)
+- [ ] Make crawler start up using data from database
+- [ ] Crawl multiple regions at the same time
