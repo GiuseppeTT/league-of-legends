@@ -1,9 +1,12 @@
 import time
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Self
 
 import requests
 import structlog
+
+from src.util import now
 
 logger = structlog.get_logger()
 
@@ -102,6 +105,8 @@ class LeagueClient:
 
     def __init__(self, api_key: str):
         self._api_key = api_key
+        self._rate_limits: dict[int, int] = {}
+        self._request_timestamps: dict[int, list[datetime]] = {}
 
     def get_league(
         self, region: Region, queue: Queue, tier: Tier, division: Division, page: int = 1
@@ -143,12 +148,15 @@ class LeagueClient:
 
     def get(self, url: str, params: dict | None = None):
         for attempt in range(LeagueClient.MAX_RETRIES + 1):
+            self._wait_if_needed()
+            local_logger = logger.bind(
+                attempt=attempt + 1, max_attempt=LeagueClient.MAX_RETRIES, url=url
+            )
             try:
-                local_logger = logger.bind(
-                    attempt=attempt + 1, max_attempt=LeagueClient.MAX_RETRIES, url=url
-                )
                 headers = {LeagueClient.HEADER_API_KEY: self._api_key}
                 response = requests.get(url, params=params, headers=headers)
+                self._update_limits(response.headers)
+                self._record_request()
                 response.raise_for_status()
                 body = response.json()
                 return body
@@ -179,3 +187,41 @@ class LeagueClient:
                 local_logger.warning(f"Retrying after {retry_after} seconds")
                 time.sleep(retry_after)
         return None
+
+    def _wait_if_needed(self):
+        for period, limit in self._rate_limits.items():
+            timestamps = self._request_timestamps[period]
+            while len(timestamps) > 0 and timestamps[0] <= now() - timedelta(seconds=period):
+                timestamps.pop(0)
+
+            if len(timestamps) >= limit:
+                wait_for = timestamps[0] + timedelta(seconds=period) - now()
+                wait_for = wait_for.total_seconds()
+                logger.info(
+                    f"Rate limit reached. Waiting preventatively for {wait_for} seconds before sending request",
+                    wait_time=wait_for,
+                    period=period,
+                    limit=limit,
+                )
+                time.sleep(wait_for)
+
+    def _update_limits(self, headers: dict[str, str]):
+        limit_header = headers.get(LeagueClient.HEADER_LIMIT)
+        if limit_header is not None:
+            new_limits = self._parse_limit_header(limit_header)
+            if new_limits != self._rate_limits:
+                self._rate_limits = new_limits
+                for period in self._rate_limits:
+                    if period not in self._request_timestamps:
+                        self._request_timestamps[period] = []
+
+    def _record_request(self):
+        for period in self._request_timestamps:
+            self._request_timestamps[period].append(now())
+
+    def _parse_limit_header(self, limit_header: str) -> dict[int, int]:
+        limits = {}
+        for limit in limit_header.split(","):
+            count, period = limit.split(":")
+            limits[int(period)] = int(count)
+        return limits

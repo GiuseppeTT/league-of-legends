@@ -1,0 +1,1 @@
+nohup uv run crawl_matches.py --region=NA1 --tier=CHALLENGER --tier=GRANDMASTER --tier=MASTER --tier=DIAMOND >> log/crawler.log 2>&1 &
