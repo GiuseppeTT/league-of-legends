@@ -22,10 +22,12 @@ import typer
 from dotenv import load_dotenv
 
 from src.client import Division, LeagueClient, Queue, QueueId, Region, RegionGroup, Tier
+from src.database import DatabaseHandler
 from src.util import now
 
 load_dotenv(override=True)
 API_KEY = os.environ["API_KEY"]
+DATABASE_ADDRESS = os.environ["DATABASE_ADDRESS"]
 LEAGUE_CRAWL_INTERVAL = timedelta(days=1)
 MATCH_TIME_WINDOW = timedelta(days=7)
 MATCH_COUNT_MAXIMUM = 100
@@ -38,7 +40,9 @@ structlog.configure(
         structlog.processors.StackInfoRenderer(),
         structlog.dev.set_exc_info,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        structlog.dev.ConsoleRenderer(colors=False, sort_keys=False),
+        structlog.dev.ConsoleRenderer(
+            colors=False, exception_formatter=structlog.dev.plain_traceback, sort_keys=False
+        ),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.NOTSET),
     context_class=dict,
@@ -119,6 +123,7 @@ def main(
     logger.info("Starting crawler")
     region_group = RegionGroup.from_region(region)
     league_client = LeagueClient(API_KEY)
+    database_handler = DatabaseHandler(DATABASE_ADDRESS)
     last_league_crawl_time = datetime.min.replace(tzinfo=timezone.utc)
     player_by_puuid = {}
     crawl_time_by_match_id = {}
@@ -128,7 +133,7 @@ def main(
                 "League data is outdated. Crawling leagues",
                 last_league_crawl_time=last_league_crawl_time.isoformat(),
             )
-            crawl_leagues(league_client, region, crawl_tiers, player_by_puuid)
+            crawl_leagues(league_client, database_handler, region, crawl_tiers, player_by_puuid)
             player_by_puuid = clean_player_by_puuid(player_by_puuid)
             crawl_time_by_match_id = clean_crawl_time_by_match_id(crawl_time_by_match_id)
             last_league_crawl_time = now()
@@ -137,11 +142,19 @@ def main(
         new_match_ids = crawl_new_match_ids(
             league_client, region_group, player, crawl_time_by_match_id
         )
-        crawl_matches(league_client, region_group, new_match_ids, crawl_time_by_match_id, player)
+        crawl_matches(
+            league_client,
+            database_handler,
+            region_group,
+            new_match_ids,
+            crawl_time_by_match_id,
+            player,
+        )
 
 
 def crawl_leagues(
     league_client: LeagueClient,
+    database_handler: DatabaseHandler,
     region: Region,
     crawl_tiers: list[Tier],
     player_by_puuid: dict[str, Player],
@@ -151,19 +164,19 @@ def crawl_leagues(
             if tier.is_apex_tier() and division != Division.I:
                 continue
             for page in count(1):
-                league = league_client.get_league(
+                league_page = league_client.get_league(
                     region, Queue.RANKED_SOLO_5x5, tier, division, page
                 )
                 logger.info(
-                    f"Got {len(league)} players",
+                    f"Got {len(league_page)} players",
                     tier=tier.value,
                     division=division.value,
                     page=page,
                 )
-                if len(league) == 0:
+                if len(league_page) == 0:
                     break
-                # TODO: Write league entry to DB here
-                for entry in league:
+                database_handler.write_leagues(league_page)
+                for entry in league_page:
                     puuid = entry["puuid"]
                     if puuid not in player_by_puuid:
                         player_by_puuid[puuid] = Player.from_league_entry(entry)
@@ -267,6 +280,7 @@ def crawl_new_match_ids(
 
 def crawl_matches(
     league_client: LeagueClient,
+    database_handler: DatabaseHandler,
     region_group: RegionGroup,
     new_match_ids: set[str],
     crawl_time_by_match_id: dict[str, datetime],
@@ -281,7 +295,7 @@ def crawl_matches(
             match_id=new_match_id,
             player=player,
         )
-        # TODO: Write match data to DB here
+        database_handler.write_match(match_)
         crawl_time_by_match_id[new_match_id] = now()
 
 
