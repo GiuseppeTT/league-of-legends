@@ -5,6 +5,10 @@ def now():
     return datetime.now(timezone.utc)
 
 
+def convert_epoch_to_datetime(epoch: int):
+    return datetime.fromtimestamp(epoch / 1000, timezone.utc)
+
+
 def flatten_match(match: dict):
     for participant in match["info"]["participants"]:
         del participant["challenges"]

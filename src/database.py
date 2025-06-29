@@ -2,7 +2,8 @@ import psycopg
 import structlog
 from psycopg.types.json import Jsonb
 
-from src.util import now
+from src.client import Queue, QueueId
+from src.util import convert_epoch_to_datetime, now
 
 logger = structlog.get_logger()
 
@@ -30,18 +31,25 @@ class DatabaseHandler:
             cursor = self._connection.cursor()
             sql_create_leagues_table = """
             CREATE TABLE IF NOT EXISTS leagues (
-                crawledAt TIMESTAMPTZ NOT NULL,
+                crawled_at TIMESTAMPTZ NOT NULL,
                 puuid TEXT NOT NULL,
+                queue TEXT NOT NULL,
+                tier TEXT NOT NULL,
+                rank TEXT NOT NULL,
                 dump JSONB NOT NULL,
-                PRIMARY KEY (puuid, crawledAt)
+                PRIMARY KEY (puuid, crawled_at)
             );
             """
             sql_create_matches_table = """
             CREATE TABLE IF NOT EXISTS matches (
-                crawledAt TIMESTAMPTZ NOT NULL,
-                matchId TEXT NOT NULL,
+                crawled_at TIMESTAMPTZ NOT NULL,
+                ended_at TIMESTAMPTZ NOT NULL,
+                match_id TEXT NOT NULL,
+                region TEXT NOT NULL,
+                version TEXT NOT NULL,
+                queue TEXT NOT NULL,
                 dump JSONB NOT NULL,
-                PRIMARY KEY (matchId)
+                PRIMARY KEY (match_id)
             );
             """
             cursor.execute(sql_create_leagues_table)
@@ -56,9 +64,24 @@ class DatabaseHandler:
         local_logger = logger
         try:
             cursor = self._connection.cursor()
-            sql = "INSERT INTO leagues (crawledAt, puuid, dump) VALUES (%s, %s, %s)"
+            sql = """
+            INSERT INTO leagues
+            (crawled_at, puuid, queue, tier, rank, dump)
+            VALUES
+            (%s, %s, %s, %s, %s, %s)
+            """
             crawled_at = now()
-            values = ((crawled_at, league["puuid"], Jsonb(league)) for league in leagues)
+            values = (
+                (
+                    crawled_at,
+                    league["puuid"],
+                    league["queueType"],
+                    league["tier"],
+                    league["rank"],
+                    Jsonb(league),
+                )
+                for league in leagues
+            )
             cursor.executemany(sql, values)
             self._connection.commit()
             local_logger.info("Inserted entries into 'leagues' table")
@@ -70,9 +93,22 @@ class DatabaseHandler:
         local_logger = logger.bind(match_id=match_["metadata"]["matchId"])
         try:
             cursor = self._connection.cursor()
-            sql = "INSERT INTO matches (crawledAt, matchId, dump) VALUES (%s, %s, %s)"
+            sql = """
+            INSERT INTO matches
+            (crawled_at, ended_at, match_id, region, version, queue, dump)
+            VALUES
+            (%s, %s, %s, %s, %s, %s, %s)
+            """
             crawled_at = now()
-            value = (crawled_at, match_["metadata"]["matchId"], Jsonb(match_))
+            value = (
+                crawled_at,
+                convert_epoch_to_datetime(match_["info"]["gameEndTimestamp"]),
+                match_["metadata"]["matchId"],
+                match_["info"]["platformId"],
+                match_["info"]["gameVersion"],
+                Queue.from_id(match_["info"]["queueId"]).value,
+                Jsonb(match_),
+            )
             cursor.execute(sql, value)
             self._connection.commit()
             local_logger.info("Inserted entry into 'matches' table")

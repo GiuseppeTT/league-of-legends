@@ -1,1 +1,0 @@
-uv run crawl_matches.py --region=NA1 --tier=CHALLENGER --tier=GRANDMASTER --tier=MASTER --tier=DIAMOND | tee -a log/crawler.log

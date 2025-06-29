@@ -52,18 +52,36 @@ class RegionGroup(Enum):
         raise ValueError("Invalid region")
 
 
-class Queue(Enum):
-    RANKED_SOLO_5x5 = "RANKED_SOLO_5x5"
-    RANKED_FLEX_SR = "RANKED_FLEX_SR"
-    RANKED_FLEX_TT = "RANKED_FLEX_TT"
-
-
 # Source: https://static.developer.riotgames.com/docs/lol/queues.json
 class QueueId(Enum):
     RANKED_SOLO_5x5 = 420
     RANKED_FLEX_SR = 440
     RANKED_FLEX_TT = 450
 
+    @classmethod
+    def from_id(cls, id_: int) -> Self:
+        for queue_id in cls:
+            if queue_id.value == id_:
+                return queue_id
+        raise ValueError("Invalid queue ID")
+
+
+class Queue(Enum):
+    RANKED_SOLO_5x5 = "RANKED_SOLO_5x5"
+    RANKED_FLEX_SR = "RANKED_FLEX_SR"
+    RANKED_FLEX_TT = "RANKED_FLEX_TT"
+
+    @classmethod
+    def from_queue_id(cls, queue_id: QueueId) -> Self:
+        for queue in cls:
+            if queue.name == queue_id.name:
+                return queue
+        raise ValueError("Invalid queue ID")
+
+    @classmethod
+    def from_id(cls, id_: int) -> Self:
+        return cls.from_queue_id(QueueId.from_id(id_))
+        
 
 class MatchType(Enum):
     RANKED = "ranked"
