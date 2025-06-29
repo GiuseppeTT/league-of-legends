@@ -27,7 +27,11 @@ from src.util import now
 
 load_dotenv(override=True)
 API_KEY = os.environ["API_KEY"]
-DATABASE_ADDRESS = os.environ["DATABASE_ADDRESS"]
+POSTGRES_USER = os.environ["POSTGRES_USER"]
+POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+POSTGRES_HOST = os.environ["POSTGRES_HOST"]
+POSTGRES_PORT = os.environ["POSTGRES_PORT"]
+POSTGRES_DATABASE = os.environ["POSTGRES_DATABASE"]
 LEAGUE_CRAWL_INTERVAL = timedelta(days=1)
 MATCH_TIME_WINDOW = timedelta(days=7)
 MATCH_COUNT_MAXIMUM = 100
@@ -123,7 +127,9 @@ def main(
     logger.info("Starting crawler")
     region_group = RegionGroup.from_region(region)
     league_client = LeagueClient(API_KEY)
-    database_handler = DatabaseHandler(DATABASE_ADDRESS)
+    database_handler = DatabaseHandler(
+        POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DATABASE
+    )
     last_league_crawl_time = datetime.min.replace(tzinfo=timezone.utc)
     player_by_puuid = {}
     crawl_time_by_match_id = {}

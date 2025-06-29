@@ -1,9 +1,7 @@
 __pycache__/
-!log/.gitkeep
-!output/.gitkeep
 .env
 .ruff_cache/
 .venv/
-*.db
-log/*
-output/*
+database/
+log/
+output/
