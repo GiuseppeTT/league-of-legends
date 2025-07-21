@@ -1,3 +1,4 @@
 - [X] Move from sqlite to postgresql (deployed in the same VM)
 - [X] Crawl multiple regions at the same time
+- [ ] Do database craetion outside crawler
 - [ ] Make crawler start up using data from database

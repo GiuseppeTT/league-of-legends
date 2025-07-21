@@ -81,7 +81,7 @@ class Queue(Enum):
     @classmethod
     def from_id(cls, id_: int) -> Self:
         return cls.from_queue_id(QueueId.from_id(id_))
-        
+
 
 class MatchType(Enum):
     RANKED = "ranked"
@@ -190,6 +190,7 @@ class LeagueClient:
                     raise
                 retry_after = response.headers.get(LeagueClient.HEADER_RETRY_AFTER, 2 * attempt)
                 retry_after = int(retry_after)
+                retry_after = max(0, retry_after)
                 local_logger.warning(f"Retrying after {retry_after} seconds")
                 time.sleep(retry_after)
             except Exception as e:
@@ -202,6 +203,7 @@ class LeagueClient:
                     local_logger.exception("Max retries exceeded. Raising exception")
                     raise
                 retry_after = 2**attempt
+                retry_after = max(0, retry_after)
                 local_logger.warning(f"Retrying after {retry_after} seconds")
                 time.sleep(retry_after)
         return None
@@ -215,6 +217,7 @@ class LeagueClient:
             if len(timestamps) >= limit:
                 wait_for = timestamps[0] + timedelta(seconds=period) - now()
                 wait_for = wait_for.total_seconds()
+                wait_for = max(0, wait_for)
                 logger.info(
                     f"Rate limit reached. Waiting preventatively for {wait_for} seconds before sending request",
                     wait_time=wait_for,

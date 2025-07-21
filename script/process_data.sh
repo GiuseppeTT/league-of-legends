@@ -1,0 +1,1 @@
+sudo docker exec -i postgres psql -U postgres -d postgres < create_simplified_matches_table.sql
